@@ -1,0 +1,17 @@
+pylibcb
+
+for now, the home of the first iteration of a python library wrapping
+libcouchbase functionality
+
+before you use this, you'll need to install:
+
+Couchbase 1.8
+libevent (libcouchbase is version 1 compat)
+https://github.com/trondn/libmemcached (i'm using trondn's branch)
+https://github.com/couchbase/libvbucket
+https://github.com/couchbase/libcouchbase
+
+for now, there is just an example program @ poc/argh.c which demonstrates
+constructing an event loop explicitly to add ones own timeouts (which
+are currently not supported for high level libcouchbase operations)
+to the event loop
