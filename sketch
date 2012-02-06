@@ -1,0 +1,41 @@
+library functionality:
+
+create instance
+- python object holding opaque reference to libcouchbase_server and event_base
+
+connect to cluster
+- libcouchbase_create/connect wrapper
+
+set single key
+- support key expiry
+- support CAS optionally
+
+get single key
+- support timeout on get operation
+
+delete key
+- nothing fancy here
+
+
+in order to support these functions:
+
+every time an operation with a timeout is invoked, a ticket must be assigned
+to the operation and kept track of in a separate table. when libcouchbase_wait
+is invoked, either the operation will break the event loop first, or the 
+timeout will break the event loop first. when the operation returns, it will
+update its ticket item in the operation table to mark itself as having succeeded
+when the timeout returns, if there is nothing in the operation table to mark
+the operation for the given ticket number as having completed successfully, the
+operation will be marked as timeout.
+
+immediately after the libcouchbase_wait, the table will have the entry for the
+current ticket number checked, and return a timeout (throw a pylibcb exception)
+or return the value successfully immediately.
+
+ticket assignment and table updates must be atomic (a threadsafe library)
+
+when both operations have returned (maybe note this with a semaphore in
+the ticket table), the entry can be deleted
+
+a table size of 1 cannot be used in case multiple python processes hold onto
+the same library memory ?
