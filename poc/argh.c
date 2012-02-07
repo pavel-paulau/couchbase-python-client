@@ -7,7 +7,9 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-/*
+
+#ifndef HAVE_LIBEVENT2
+
 static int
 event_assign(struct event *ev,
              struct event_base *base,
@@ -46,7 +48,8 @@ static struct event *event_new(struct event_base *base,
     }
     return ev;
 }
-*/
+
+#endif
 
 char *asciiz(const void *data, size_t nbytes) {
   char *z = malloc(nbytes+1);
