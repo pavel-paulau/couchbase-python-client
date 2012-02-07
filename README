@@ -7,7 +7,7 @@ before you use this, you'll need to install:
 
 Couchbase 1.8
 libevent (libcouchbase is version 1 compat)
-https://github.com/trondn/libmemcached (i'm using trondn's branch)
+use the most recent version of libmemcached from libmemcached.org. build from scratch
 https://github.com/couchbase/libvbucket
 https://github.com/couchbase/libcouchbase
 
