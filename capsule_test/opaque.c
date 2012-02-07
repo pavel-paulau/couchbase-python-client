@@ -21,7 +21,8 @@ static PyObject *NotOpaqueObject;
 //  free(obj);
 //}
 
-void opaque_dest(void *desc, void *obj) {
+void opaque_dest(void *obj, void *desc) {
+  printf("destroying object with desc %s\n", desc);
   free(obj);
 }
 
