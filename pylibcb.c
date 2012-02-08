@@ -20,6 +20,12 @@ static PyObject *OutOfMemory;
 static PyObject *ConnectionFailure;
 static PyObject *Failure;
 
+#define CB_EXCEPTION(type, code) { \
+  PyErr_SetString(type, #code); \
+  context->exception = 1; \
+  return 0; \
+  }
+
 typedef struct t_ticket {  
   int ticket[2];
   struct t_ticket *next;
@@ -67,6 +73,7 @@ typedef struct t_pylibcb_instance {
   int timed_out;
   int exception;
   buffer returned_value;
+  libcouchbase_error_t result;
   libcouchbase_cas_t returned_cas;
   struct event_base *base;
   libcouchbase_t cb;
@@ -127,9 +134,18 @@ void *get_callback(libcouchbase_t instance,
   if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
 
-
-  
-
+  switch (error) {
+  case LIBCOUCHBASE_SUCCESS:
+  case LIBCOUCHBASE_KEY_ENOENT:
+    context->result = error;
+    break;
+  case LIBCOUCHBASE_ENOMEM:
+    CB_EXCEPTION(OutOfMemory, LIBCOUCHBASE_ENOMEM);
+  case LIBCOUCHBASE_EINTERNAL:
+    CB_EXCEPTION(Failure, LIBCOUCHBASE_EINTERNAL);
+  default:
+    CB_EXCEPTION(Failure, GET_CALLBACK);
+  }
   
   if (!guarantee_buffer(&context->returned_value, nbytes)) {
     PyErr_SetString(OutOfMemory, "not enough memory for results of get");
@@ -288,6 +304,9 @@ static PyObject *set(PyObject *self, PyObject *args) {
   libcouchbase_store_by_key(context->cb, hand_out_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, key, nkey, val, nval, 0, 0, 0);
   libcouchbase_wait(context->cb);
 
+  if (context->exception)
+    return 0;
+
   Py_INCREF(Py_None);
   return Py_None;
 }
@@ -305,6 +324,9 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
 
   libcouchbase_remove_by_key(context->cb, hand_out_ticket(new_ticket()), 0, 0, key, nkey, 0);
   libcouchbase_wait(context->cb);
+
+  if (context->exception)
+    return 0;
 
   Py_INCREF(Py_None);
   return Py_None;
@@ -332,18 +354,25 @@ static PyObject *get(PyObject *self, PyObject *args) {
   while (!context->timed_out && !context->succeeded && !context->exception)
     libcouchbase_wait(context->cb);
 
-  if (context->succeeded)
-    return Py_BuildValue("s#", context->returned_value.contents, context->returned_value.filled);
-
-  if (context->exception) /* exception set by callback handler */
+  if (context->exception)
     return 0;
   
-  if (context->timed_out) 
+  if (context->timed_out) {
     PyErr_SetString(Timeout, "timeout in get");
     return 0;
+  }
 
-  PyErr_SetString(Failure, "no timeout.. AND no success?");
-  return 0;
+  if (!context->succeeded) {
+    PyErr_SetString(Failure, "no timeout.. AND no success?");
+    return 0;
+  } 
+
+  if (context->result == LIBCOUCHBASE_KEY_ENOENT) {
+    Py_INCREF(Py_None);
+    return Py_None;
+  }
+
+  return Py_BuildValue("s#", context->returned_value.contents, context->returned_value.filled);
 }
 
 static PyMethodDef PylibcbMethods[] = {
