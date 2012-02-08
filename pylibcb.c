@@ -59,24 +59,40 @@ char *asciiz(const void *data, size_t nbytes) {
   return z;
 }
 
+static PyObject *Timeout;
+static PyObject *OutOfMemory;
+static PyObject *ConnectionFailure;
+static PyObject *Failure;
+
 typedef struct t_pylibcb_instance {
-  static int callback_counter = 0;
-  static int succeeded = 0;
-  static int timed_out = 0;
-  static char current_key[256];
-  static int current_key_nbytes = 0;
-  static char returned_value[16384];
-  static int returned_value_nbytes = 0;
-  static libcouchbase_cas_t returned_cas;
-  static struct event_base *base = 0;
+  int callback_counter;
+  int succeeded;
+  int timed_out;
+  char *current_key;
+  int current_nkey;
+  char returned_value[16384];
+  int returned_value_nbytes;
+  libcouchbase_cas_t returned_cas;
+  struct event_base *base;
+  libcouchbase_t cb;
 } pylibcb_instance;
 
+static char *pylibcb_instance_desc = "pylibcb_instance";
 
+void pylibcb_instance_dest(void *obj, void *desc) {
+  pylibcb_instance *z = (pylibcb_instance *) obj;
 
-int operation_key_is_current(void *key, libcouchbase_size_t nbytes) {
-  if (nbytes != current_key_nbytes)
+  libcouchbase_destroy(z->cb);
+  event_base_free(z->base); /* will libcouchbase do this for us? */
+  free(z);
+}
+
+static pylibcb_instance *context = 0;
+
+int operation_key_is_current(const void *key, libcouchbase_size_t nbytes) {
+  if (nbytes != context->current_nkey)
     return 0;
-  if (memcmp(current_key, key, nbytes))
+  if (memcmp(context->current_key, key, nbytes))
     return 0;
   return 1;
 }
@@ -101,10 +117,10 @@ void *get_callback(libcouchbase_t instance,
     return 0;
   
   /* flag the operation as a success */
-  succeeded = 1;
-  memcpy(returned_value, bytes, nbytes);
-  returned_value_nbytes = nbytes;
-  returned_cas = cas;
+  context->succeeded = 1;
+  memcpy(context->returned_value, bytes, nbytes);
+  context->returned_value_nbytes = nbytes;
+  context->returned_cas = cas;
 
   return 0;
 }
@@ -117,7 +133,7 @@ void *set_callback(libcouchbase_t instance,
 		   libcouchbase_size_t nkey,
 		   libcouchbase_cas_t cas) {
   
-  if (!operation_key_is_current(key, nbytes))
+  if (!operation_key_is_current(key, nkey))
     return 0;
 
   /* something here to pass on successes/failures up the chain */
@@ -131,7 +147,7 @@ void *remove_callback(libcouchbase_t instance,
 		      const void *key,
 		      libcouchbase_size_t nkey) {
 
-  if (!operation_key_is_current(key, nbytes))
+  if (!operation_key_is_current(key, nkey))
     return 0;
 
   /* something here to pass on successes/failures up the chain */
@@ -139,68 +155,222 @@ void *remove_callback(libcouchbase_t instance,
   return 0;
 }
 
-void timeout_function(libcouchbase_socket_t sock, short which, void *cb_data) {
+void timeout_callback(libcouchbase_socket_t sock, short which, void *cb_data) {
   int operation_number = *((int *) cb_data);
-  if (operation_number != callback_counter)
+  free(cb_data);
+  if (operation_number != context->callback_counter)
     return;
 
   /* mark current operation as timed out and break the event loop */
  
-  timed_out = 1;
-  event_base_loopbreak(base);
+  context->timed_out = 1;
+  event_base_loopbreak(context->base);
 }
 
-
-
-
-
-
-
-int main(int argc, char **argv) {
-  base = event_base_new();
-  libcouchbase_error_t e = LIBCOUCHBASE_SUCCESS;
-  libcouchbase_io_opt_t *cb_base = libcouchbase_create_io_ops(LIBCOUCHBASE_IO_OPS_LIBEVENT, base, &e);
-
-  if (e == LIBCOUCHBASE_NOT_SUPPORTED) {
-    printf("libcouchbase does not support libevent on this platform\n");
-    exit(0);
-  } else if (e == LIBCOUCHBASE_ENOMEM) {
-    printf("libcouchbase ran out of memory!\n");
-    exit(0);
-  }
-
-  libcouchbase_t cb = libcouchbase_create(0, 0, 0, 0, cb_base);
-  libcouchbase_set_get_callback(cb, get_callback);
-
-  if (libcouchbase_connect(cb) != LIBCOUCHBASE_SUCCESS) {
-    printf("argh\n");
-    exit(0);
-  }
-
-  printf("konnekt\n");
-  libcouchbase_wait(cb);
-  printf("store\n");
-  libcouchbase_store_by_key(cb, 0, LIBCOUCHBASE_SET, 0, 0, "test", 4, "contents", 8, 0, 0, 0);
-  libcouchbase_wait(cb);
-  
-  int keysize = 4;
-  char *key = "test";
-  
-  printf("timeout\n");
-  struct event *timeout = event_new(base, -1, 0, 0, 0);
+void create_timeout(unsigned int usec, int callback_counter) {
+  struct event *timeout = event_new(context->base, -1, 0, 0, 0);
   struct timeval tmo;
-  unsigned int usec = 50;
-  event_assign(timeout, base, -1, EV_TIMEOUT | EV_PERSIST, timeout_function, key);
+  int *callback_box = malloc(sizeof(int));
+  *callback_box = callback_counter;
+  event_assign(timeout, context->base, -1, EV_TIMEOUT | EV_PERSIST, timeout_callback, callback_box);
   tmo.tv_sec = usec / 1000000;
   tmo.tv_usec = usec % 1000000;
   event_add(timeout, &tmo);
+}
 
+static PyObject *open(PyObject *self, PyObject *args) {
+  char *host = 0;
+  char *user = 0;
+  char *passwd = 0;
+  char *bucket = 0;
 
-  printf("get\n");
-  libcouchbase_mget_by_key(cb, 0, 0, 0, 1, &key, &keysize, 0);
-  printf("get??\n");
-  libcouchbase_wait(cb);
-  libcouchbase_wait(cb);
+  if (!PyArg_ParseTuple(args, "|ssss", &host, &user, &passwd, &bucket))
+    return 0;
 
+  pylibcb_instance *z = malloc(sizeof(pylibcb_instance));
+  if (!z) {
+    PyErr_SetString(OutOfMemory, "ran out of memory while allocating pylibcb instance");
+    return 0;
+  }
+  z->callback_counter = 0;
+
+  z->base = event_base_new();
+  if (!z) {
+    free(z);
+    PyErr_SetString(OutOfMemory, "could not create event base for new instance");
+    return 0;
+  }
+
+  libcouchbase_error_t e = LIBCOUCHBASE_SUCCESS;
+  libcouchbase_io_opt_t *cb_base = libcouchbase_create_io_ops(LIBCOUCHBASE_IO_OPS_LIBEVENT, z->base, &e);
+  if (e == LIBCOUCHBASE_NOT_SUPPORTED) {
+    event_base_free(z->base);
+    free(z);
+    PyErr_SetString(Failure, "libcouchbase as built on this platform does not support libevent ?");
+    return 0;
+  } else if (e == LIBCOUCHBASE_ENOMEM) {
+    event_base_free(z->base);
+    free(z);
+    PyErr_SetString(OutOfMemory, "ran out of memory while setting up libcouchbase event loop");
+    return 0;
+  }
+  if (e != LIBCOUCHBASE_SUCCESS) {
+    event_base_free(z->base);
+    free(z);
+    PyErr_SetString(Failure, "a mysterious failure occurred while setting up libcouchbase event loop");
+    return 0;
+  }
+  
+  z->cb = libcouchbase_create(host, user, passwd, bucket, cb_base);
+  if (!z->cb) {
+    /* unsure what to do with libcouchbase_io_ops_t created in last step */
+    event_base_free(z->base);
+    free(z);
+    PyErr_SetString(OutOfMemory, "could not create libcouchbase instance");
+    return 0;
+  }
+
+  libcouchbase_set_storage_callback(z->cb, (libcouchbase_storage_callback) set_callback);
+  libcouchbase_set_get_callback(z->cb, (libcouchbase_get_callback) get_callback);
+  libcouchbase_set_remove_callback(z->cb, (libcouchbase_remove_callback) remove_callback);
+
+  if (libcouchbase_connect(z->cb) != LIBCOUCHBASE_SUCCESS) {
+    event_base_free(z->base);
+    free(z);
+    PyErr_SetString(ConnectionFailure, "libcouchbase_connect");
+    return 0;
+  }
+
+  /* establish connection */
+  libcouchbase_wait(z->cb);
+
+  return PyCObject_FromVoidPtrAndDesc(z, pylibcb_instance_desc, pylibcb_instance_dest);
+}
+
+int pyobject_is_pylibcb_instance(PyObject *x) {
+  if (!PyCObject_Check(x)
+      || memcmp(PyCObject_GetDesc(x), pylibcb_instance_desc, sizeof("pylibcb_instance"))) {
+    PyErr_SetString(Failure, "need pylibcb instance as first argument");
+    return 0;
+  } return 1;
+}
+
+static PyObject *set(PyObject *self, PyObject *args) {
+  PyObject *cb;
+  void *key, *val;
+  int nkey, nval;
+
+  if (!PyArg_ParseTuple(args, "Os#s#", &cb, &key, &nkey, &val, &nval))
+    return 0;
+  if (!pyobject_is_pylibcb_instance(cb))
+    return 0;
+
+  context = (pylibcb_instance *) PyCObject_AsVoidPtr(cb);
+  context->current_key = key;
+  context->current_nkey = nkey;
+
+  libcouchbase_store_by_key(context->cb, 0, LIBCOUCHBASE_SET, 0, 0, key, nkey, val, nval, 0, 0, 0);
+  libcouchbase_wait(context->cb);
+
+  Py_INCREF(Py_None);
+  return Py_None;
+}
+
+static PyObject *del(PyObject *self, PyObject *args) {
+  PyObject *cb;
+  void *key;
+  int nkey;
+
+  if (!PyArg_ParseTuple(args, "O#s", &cb, &key, &nkey))
+    return 0;
+  if (!pyobject_is_pylibcb_instance(cb))
+    return 0;
+
+  context = (pylibcb_instance *) PyCObject_AsVoidPtr(cb);
+  context->current_key = key;
+  context->current_nkey = nkey;
+  
+  libcouchbase_remove_by_key(context->cb, 0, 0, 0, key, nkey, 0);
+  libcouchbase_wait(context->cb);
+
+  Py_INCREF(Py_None);
+  return Py_None;
+}
+
+static PyObject *get(PyObject *self, PyObject *args) {
+  PyObject *cb;
+  void *key;
+  int nkey;
+  int usec = 0;
+
+  if (!PyArg_ParseTuple(args, "O#s|i", &cb, &key, &nkey, &usec))
+    return 0;
+  if (!pyobject_is_pylibcb_instance(cb))
+    return 0;
+  
+  context = (pylibcb_instance *) PyCObject_AsVoidPtr(cb);
+  context->current_key = key;
+  context->current_nkey = nkey;
+  context->succeeded = 0;
+  context->timed_out = 0;
+
+  if (usec)
+    create_timeout(usec, ++context->callback_counter);
+  libcouchbase_mget_by_key(context->cb, 0, 0, 0, 1, &key, &nkey, 0);
+
+  while (!context->timed_out && !context->succeeded)
+    libcouchbase_wait(context->cb);
+
+  if (context->succeeded)
+    return Py_BuildValue("s#", context->returned_value, context->returned_value_nbytes);
+  
+  if (context->timed_out) 
+    PyErr_SetString(Timeout, "timeout in get");
+    return 0;
+
+  PyErr_SetString(Failure, "no timeout.. AND no success?");
+  return 0;
+}
+
+static PyMethodDef PylibcbMethods[] = {
+  { "open", open, METH_VARARGS,
+    "Open connection to couchbase server" },
+  { "get", get, METH_VARARGS,
+    "Get a value by key. Optionally specify timeout in usecs" },
+  { "set", set, METH_VARARGS,
+    "Set a value by key" },
+  { "del", del, METH_VARARGS,
+    "Remove a value by key" },
+  { 0, 0, 0, 0 }
+};
+
+PyMODINIT_FUNC initpylibcb() {
+  PyObject *m;
+
+  m = Py_InitModule("pylibcb", PylibcbMethods);
+  if (!m)
+    return;
+
+  Timeout = PyErr_NewException("pylibcb.Timeout", 0, 0);
+  Py_INCREF(Timeout);
+  PyModule_AddObject(m, "Timeout", Timeout);
+  
+  OutOfMemory = PyErr_NewException("pylibcb.OutOfMemory", 0, 0);
+  Py_INCREF(OutOfMemory);
+  PyModule_AddObject(m, "OutOfMemory", OutOfMemory);
+
+  ConnectionFailure = PyErr_NewException("pylibcb.ConnectionFailure", 0, 0);
+  Py_INCREF(ConnectionFailure);
+  PyModule_AddObject(m, "ConnectionFailure", ConnectionFailure);
+  
+  Failure = PyErr_NewException("pylibcb.Failure", 0, 0);
+  Py_INCREF(Failure);
+  PyModule_AddObject(m, "Failure", Failure);   
+}
+
+int main(int argc, char **argv) {  
+  Py_SetProgramName(argv[0]);
+  Py_Initialize();
+  initpylibcb();
   return 0;
 }

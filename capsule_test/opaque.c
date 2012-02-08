@@ -59,6 +59,7 @@ static PyObject *show_opaque(PyObject *self, PyObject *args) {
   
   op = (opaque *) PyCObject_AsVoidPtr(obj);
   printf("%d:%s\n", op->x, op->message);
+  Py_INCREF(Py_None);
   return Py_None;
 }
 
@@ -86,4 +87,5 @@ int main(int argc, char *argv[]) {
   Py_SetProgramName(argv[0]);
   Py_Initialize();
   initopaque();
+  return 0;
 }
