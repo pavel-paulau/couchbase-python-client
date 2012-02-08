@@ -20,8 +20,16 @@ static PyObject *OutOfMemory;
 static PyObject *ConnectionFailure;
 static PyObject *Failure;
 
+#define TICKET_POOL_SIZE 256
+
+typedef struct t_ticket {  
+  int ticket[2];
+  struct t_ticket *next;
+} ticket;
+
 typedef struct t_pylibcb_instance {
   int callback_ticket;
+  ticket *ticket_pool;
   int succeeded;
   int timed_out;
   char returned_value[16384];
@@ -44,22 +52,33 @@ void pylibcb_instance_dest(void *obj, void *desc) {
 static pylibcb_instance *context = 0;
 
 int *new_ticket() {
-  int *boxed = malloc(sizeof(int) *2);
-  boxed[0] = ++context->callback_ticket;
-  boxed[1] = 0;
-  return boxed;
+  ticket *t;
+
+  if (context->ticket_pool) {
+    t = context->ticket_pool;
+    context->ticket_pool = t->next;
+  } else
+    t = malloc(sizeof(ticket));    
+
+  t->ticket[0] = ++context->callback_ticket;
+  t->ticket[1] = 0;
+  t->next = 0;
+
+  return (int *) t;  
 }
 
-int *punch_ticket(int *t) {
+int *hand_out_ticket(int *t) {
   ++t[1];
   return t;
 }
 
 int rip_ticket(int *t) {
   int r = t[0];
-  if (!--t[1])
-    free(t);
-  return r;
+  if (!--t[1]) {
+    ticket *_t = (ticket *) t;
+    _t->next = context->ticket_pool;
+    context->ticket_pool = _t;
+  } return r;
 }
 
 void *get_callback(libcouchbase_t instance,
@@ -145,6 +164,7 @@ static PyObject *open(PyObject *self, PyObject *args) {
     return 0;
   }
   z->callback_ticket = 0;
+  z->ticket_pool = 0;
 
   z->base = event_base_new();
   if (!z) {
@@ -217,7 +237,7 @@ static PyObject *set(PyObject *self, PyObject *args) {
     return 0;
 
   context = (pylibcb_instance *) PyCObject_AsVoidPtr(cb);
-  libcouchbase_store_by_key(context->cb, punch_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, key, nkey, val, nval, 0, 0, 0);
+  libcouchbase_store_by_key(context->cb, hand_out_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, key, nkey, val, nval, 0, 0, 0);
   libcouchbase_wait(context->cb);
 
   Py_INCREF(Py_None);
@@ -235,7 +255,7 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
     return 0;
 
   context = (pylibcb_instance *) PyCObject_AsVoidPtr(cb);
-  libcouchbase_remove_by_key(context->cb, punch_ticket(new_ticket()), 0, 0, key, nkey, 0);
+  libcouchbase_remove_by_key(context->cb, hand_out_ticket(new_ticket()), 0, 0, key, nkey, 0);
   libcouchbase_wait(context->cb);
 
   Py_INCREF(Py_None);
@@ -245,10 +265,10 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
 static PyObject *get(PyObject *self, PyObject *args) {
   PyObject *cb;
   void *key;
-  int nkey;
+  int _nkey;
   int usec = 0;
 
-  if (!PyArg_ParseTuple(args, "Os#|i", &cb, &key, &nkey, &usec))
+  if (!PyArg_ParseTuple(args, "Os#|i", &cb, &key, &_nkey, &usec))
     return 0;
   if (!pyobject_is_pylibcb_instance(cb))
     return 0;
@@ -258,10 +278,11 @@ static PyObject *get(PyObject *self, PyObject *args) {
   context->timed_out = 0;
 
   int *ticket = new_ticket();
+  libcouchbase_size_t nkey = _nkey;
 
   if (usec)
-    create_timeout(usec, punch_ticket(ticket));
-  libcouchbase_mget_by_key(context->cb, punch_ticket(ticket), 0, 0, 1, &key, &nkey, 0);
+    create_timeout(usec, hand_out_ticket(ticket));
+  libcouchbase_mget_by_key(context->cb, hand_out_ticket(ticket), 0, 0, 1, &key, &nkey, 0);
 
   while (!context->timed_out && !context->succeeded)
     libcouchbase_wait(context->cb);
