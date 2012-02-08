@@ -124,8 +124,12 @@ void *get_callback(libcouchbase_t instance,
 		   libcouchbase_size_t nbytes,
 		   libcouchbase_uint32_t flags,
 		   libcouchbase_cas_t cas) {
-  if (rip_ticket(cookie) != context->callback_ticket)
+  if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
+
+
+  
+
   
   if (!guarantee_buffer(&context->returned_value, nbytes)) {
     PyErr_SetString(OutOfMemory, "not enough memory for results of get");
@@ -148,7 +152,7 @@ void *set_callback(libcouchbase_t instance,
 		   const void *key,
 		   libcouchbase_size_t nkey,
 		   libcouchbase_cas_t cas) {
-  if (rip_ticket(cookie) != context->callback_ticket)
+  if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
 
   /* something here to pass on successes/failures up the chain */
@@ -161,7 +165,7 @@ void *remove_callback(libcouchbase_t instance,
 		      libcouchbase_error_t error,
 		      const void *key,
 		      libcouchbase_size_t nkey) {
-  if (rip_ticket(cookie) != context->callback_ticket)
+  if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
   
   /* something here to pass on successes/failures up the chain */
@@ -170,8 +174,8 @@ void *remove_callback(libcouchbase_t instance,
 }
 
 void timeout_callback(libcouchbase_socket_t sock, short which, void *cb_data) {
-  if (rip_ticket(cb_data) != context->callback_ticket)
-    return 0;
+  if (rip_ticket((int *) cb_data) != context->callback_ticket)
+    return;
 
   /* mark current operation as timed out and break the event loop */
  
@@ -308,7 +312,7 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
 
 static PyObject *get(PyObject *self, PyObject *args) {
   PyObject *cb;
-  void *key;
+  const void * const key;
   int _nkey;
   int usec = 0;
 
