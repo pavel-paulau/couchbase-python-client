@@ -4,7 +4,7 @@ from distutils.core import setup, Extension
 
 
 pylibcb = Extension('pylibcb',
-                    include_dirs = ['/opt/couchbase/include'],
+                    #include_dirs = ['/opt/couchbase/include'],
                     libraries = ['event', 'couchbase'],
                     library_dirs = ['/opt/couchbase/lib'],
                     sources = ['pylibcb.c'])

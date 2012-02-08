@@ -7,50 +7,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 
-
-#ifndef HAVE_LIBEVENT2
-
-static int
-event_assign(struct event *ev,
-             struct event_base *base,
-             int fd,
-             short events,
-             void (*callback)(int, short, void *),
-             void *arg)
-{
-    event_base_set(base, ev);
-    ev->ev_callback = callback;
-    ev->ev_arg = arg;
-    ev->ev_fd = fd;
-    ev->ev_events = events;
-    ev->ev_res = 0;
-    ev->ev_flags = EVLIST_INIT;
-    ev->ev_ncalls = 0;
-    ev->ev_pncalls = NULL;
-
-    return 0;
-}
-
-static struct event *event_new(struct event_base *base,
-			       int fd,
-			       short events,
-			       void (*cb)(int, short, void *),
-			       void *arg)
-{
-    struct event *ev;
-    ev = malloc(sizeof(struct event));
-    if (ev == NULL) {
-        return NULL;
-    }
-    if (event_assign(ev, base, fd, events, cb, arg) < 0) {
-        free(ev);
-        return NULL;
-    }
-    return ev;
-}
-
-#endif
-
 char *asciiz(const void *data, size_t nbytes) {
   char *z = malloc(nbytes+1);
   memcpy(z, data, nbytes);
@@ -88,6 +44,8 @@ int main(int argc, char **argv) {
   base = event_base_new();
   libcouchbase_error_t e = LIBCOUCHBASE_SUCCESS;
   libcouchbase_io_opt_t *cb_base = libcouchbase_create_io_ops(LIBCOUCHBASE_IO_OPS_LIBEVENT, base, &e);
+
+  printf("%d\n", e);
 
   if (e == LIBCOUCHBASE_NOT_SUPPORTED) {
     printf("libcouchbase does not support libevent on this platform\n");
