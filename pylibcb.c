@@ -34,11 +34,13 @@ typedef struct t_buffer {
 int guarantee_buffer(buffer *b, size_t size) {
   if (b->size < size) {
     size_t i = 1;
+    size_t e = (SIZE_MAX >> 1) + 1;
+
     --size;
     do {
-      size |= size >> i++;
+      size |= size >> i;
       i <<= 1;
-    } while (i != sizeof(size_t) >> 1);
+    } while (i != e);
     ++size;
     
     if (b->contents)
@@ -125,17 +127,16 @@ void *get_callback(libcouchbase_t instance,
   if (rip_ticket(cookie) != context->callback_ticket)
     return 0;
   
-  /* flag the operation as a success */
-  context->succeeded = 1;
-
   if (!guarantee_buffer(&context->returned_value, nbytes)) {
     PyErr_SetString(OutOfMemory, "not enough memory for results of get");
+    context->exception = 1;
     return 0;
   }
 
   memcpy(context->returned_value.contents, bytes, nbytes);
   context->returned_value.filled = nbytes;
   context->returned_cas = cas;
+  context->succeeded = 1;
 
   return 0;
 }
