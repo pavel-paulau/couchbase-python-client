@@ -133,11 +133,11 @@ void *get_callback(libcouchbase_t instance,
 		   libcouchbase_cas_t cas) {
   if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
+  context->result = error;
 
   switch (error) {
   case LIBCOUCHBASE_SUCCESS:
   case LIBCOUCHBASE_KEY_ENOENT:
-    context->result = error;
     break;
   case LIBCOUCHBASE_ENOMEM:
     CB_EXCEPTION(OutOfMemory, LIBCOUCHBASE_ENOMEM);
@@ -170,6 +170,7 @@ void *set_callback(libcouchbase_t instance,
 		   libcouchbase_cas_t cas) {
   if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
+  context->result = error;
 
   /* something here to pass on successes/failures up the chain */
   
@@ -183,6 +184,7 @@ void *remove_callback(libcouchbase_t instance,
 		      libcouchbase_size_t nkey) {
   if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
+  context->result = error;
   
   /* something here to pass on successes/failures up the chain */
 
