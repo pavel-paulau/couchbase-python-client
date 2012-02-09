@@ -343,14 +343,19 @@ static PyObject *set(PyObject *self, PyObject *args) {
   PyObject *cb;
   void *key, *val;
   int nkey, nval;
+  unsigned long _expiry = 0;
+  unsigned long cas = 0;
 
-  if (!PyArg_ParseTuple(args, "Os#s#", &cb, &key, &nkey, &val, &nval))
+  if (!PyArg_ParseTuple(args, "Os#s#|kk", &cb, &key, &nkey, &val, &nval, &_expiry, &cas))
     return 0;
   if (!pyobject_is_pylibcb_instance(cb))
     return 0;
   set_context(cb);
 
-  libcouchbase_store_by_key(context->cb, hand_out_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, key, nkey, val, nval, 0, 0, 0);
+  time_t expiry = _expiry;
+
+  libcouchbase_store_by_key(context->cb, hand_out_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, 
+			    key, nkey, val, nval, 0, expiry, cas);
   libcouchbase_wait(context->cb);
   INTERNAL_EXCEPTION_HANDLER(return 0);
 
@@ -365,14 +370,15 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
   PyObject *cb;
   void *key;
   int nkey;
+  unsigned long cas = 0;
 
-  if (!PyArg_ParseTuple(args, "Os#", &cb, &key, &nkey))
+  if (!PyArg_ParseTuple(args, "Os#|k", &cb, &key, &nkey, &cas))
     return 0;
   if (!pyobject_is_pylibcb_instance(cb))
     return 0;
   set_context(cb);
 
-  libcouchbase_remove_by_key(context->cb, hand_out_ticket(new_ticket()), 0, 0, key, nkey, 0);
+  libcouchbase_remove_by_key(context->cb, hand_out_ticket(new_ticket()), 0, 0, key, nkey, cas);
   libcouchbase_wait(context->cb);
   INTERNAL_EXCEPTION_HANDLER(return 0);
 
@@ -388,8 +394,10 @@ static PyObject *get(PyObject *self, PyObject *args) {
   const void * const key;
   int _nkey;
   int usec = 0;
-
-  if (!PyArg_ParseTuple(args, "Os#|i", &cb, &key, &_nkey, &usec))
+  unsigned long _expiry = 0;
+  int return_cas = 0;
+  
+  if (!PyArg_ParseTuple(args, "Os#|iki", &cb, &key, &_nkey, &usec, &_expiry, &return_cas))
     return 0;
   if (!pyobject_is_pylibcb_instance(cb))
     return 0;  
@@ -397,10 +405,11 @@ static PyObject *get(PyObject *self, PyObject *args) {
 
   int *ticket = new_ticket();
   libcouchbase_size_t nkey = _nkey;
+  time_t expiry = _expiry;
 
   if (usec)
     create_timeout(usec, hand_out_ticket(ticket));
-  libcouchbase_mget_by_key(context->cb, hand_out_ticket(ticket), 0, 0, 1, &key, &nkey, 0);
+  libcouchbase_mget_by_key(context->cb, hand_out_ticket(ticket), 0, 0, 1, &key, &nkey, _expiry ? &expiry : 0);
 
   while (!context->timed_out && !context->succeeded && !context->exception && !context->internal_exception)
     libcouchbase_wait(context->cb);
@@ -424,6 +433,9 @@ static PyObject *get(PyObject *self, PyObject *args) {
     return Py_None;
   }
 
+  if (return_cas)
+    return Py_BuildValue("s#k", context->returned_value.contents, context->returned_value.filled,
+			(unsigned long) context->returned_cas);
   return Py_BuildValue("s#", context->returned_value.contents, context->returned_value.filled);
 }
 
