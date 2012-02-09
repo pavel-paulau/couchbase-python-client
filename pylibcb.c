@@ -19,9 +19,10 @@ static PyObject *Timeout;
 static PyObject *OutOfMemory;
 static PyObject *ConnectionFailure;
 static PyObject *Failure;
+static PyObject *KeyExists;
 
-#define CB_EXCEPTION(type, code) { \
-  PyErr_SetString(type, #code); \
+#define CB_EXCEPTION(type, msg) { \
+  PyErr_SetString(type, msg); \
   context->exception = 1; \
   return 0; \
   }
@@ -89,7 +90,7 @@ void pylibcb_instance_dest(void *obj, void *desc) {
 
   destroy_buffer(&z->returned_value);
   libcouchbase_destroy(z->cb);
-  event_base_free(z->base); /* will libcouchbase do this for us? */
+  event_base_free(z->base);
   free(z);
 }
 
@@ -165,11 +166,11 @@ void *get_callback(libcouchbase_t instance,
   case LIBCOUCHBASE_KEY_ENOENT:
     break;
   case LIBCOUCHBASE_ENOMEM:
-    CB_EXCEPTION(OutOfMemory, LIBCOUCHBASE_ENOMEM);
+    CB_EXCEPTION(OutOfMemory, "libcouchbase_enomem");
   case LIBCOUCHBASE_EINTERNAL:
-    CB_EXCEPTION(Failure, LIBCOUCHBASE_EINTERNAL);
+    CB_EXCEPTION(Failure, "libcouchbase_einternal");
   default:
-    CB_EXCEPTION(Failure, GET_CALLBACK);
+    CB_EXCEPTION(Failure, "mystery condition in get callback");
   }
   
   if (!guarantee_buffer(&context->returned_value, nbytes)) {
@@ -197,8 +198,15 @@ void *set_callback(libcouchbase_t instance,
     return 0;
   context->result = error;
 
-  /* something here to pass on successes/failures up the chain */
-  
+  switch (error) {
+  case LIBCOUCHBASE_SUCCESS:
+    break;
+  case LIBCOUCHBASE_KEY_EEXISTS:
+    CB_EXCEPTION(KeyExists, "key already present");
+  default:
+    CB_EXCEPTION(Failure, "mystery condition in set callback");
+  }
+
   return 0;
 }
 
@@ -210,8 +218,13 @@ void *remove_callback(libcouchbase_t instance,
   if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
   context->result = error;
-  
-  /* something here to pass on successes/failures up the chain */
+
+  switch (error) {
+  case LIBCOUCHBASE_SUCCESS:
+    break;
+  default:
+    CB_EXCEPTION(Failure, "mystery condition in set callback");
+  }  
 
   return 0;
 }
@@ -299,7 +312,6 @@ static PyObject *open(PyObject *self, PyObject *args) {
 		    z->internal_error_msg : "libcouchbase_connect");
     goto free_event_base;
   }
-    
 
   return PyCObject_FromVoidPtrAndDesc(z, pylibcb_instance_desc, pylibcb_instance_dest);
 
@@ -448,7 +460,11 @@ PyMODINIT_FUNC initpylibcb() {
   
   Failure = PyErr_NewException("pylibcb.Failure", 0, 0);
   Py_INCREF(Failure);
-  PyModule_AddObject(m, "Failure", Failure);   
+  PyModule_AddObject(m, "Failure", Failure);
+
+  KeyExists = PyErr_NewException("pylibcb.KeyExists", 0, 0);
+  Py_INCREF(KeyExists);
+  PyModule_AddObject(m, "KeyExists", KeyExists);
 }
 
 int main(int argc, char **argv) {  
