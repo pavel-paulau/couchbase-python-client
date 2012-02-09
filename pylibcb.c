@@ -72,8 +72,11 @@ typedef struct t_pylibcb_instance {
   int succeeded;
   int timed_out;
   int exception;
+  int internal_exception;
   buffer returned_value;
   libcouchbase_error_t result;
+  libcouchbase_error_t internal_error;
+  char *internal_error_msg;
   libcouchbase_cas_t returned_cas;
   struct event_base *base;
   libcouchbase_t cb;
@@ -121,6 +124,28 @@ int rip_ticket(int *t) {
     context->ticket_pool = _t;
   } return r;
 }
+
+void *error_callback(libcouchbase_t instance,
+		     libcouchbase_error_t error,
+		     const char *errinfo) {
+  /* just in case libcouchbase_error_handler starts giving us this */
+  if (error == LIBCOUCHBASE_SUCCESS)
+    return 0;
+
+  context->internal_error = error;
+  context->internal_error_msg = (char *) errinfo;
+  context->internal_exception = 1;
+  event_base_loopbreak(context->base);
+  return 0;
+}
+
+#define INTERNAL_EXCEPTION_HANDLER(x) { \
+  if (context->internal_exception == 1) { \
+    PyErr_SetString(Failure, context->internal_error_msg ? \
+		    context->internal_error_msg : "internal exception"); \
+    x; \
+  } \
+  }
 
 void *get_callback(libcouchbase_t instance,
 		   const void *cookie,
@@ -255,17 +280,26 @@ static PyObject *open(PyObject *self, PyObject *args) {
     goto free_event_base;
   }
 
+  context = z;
+  libcouchbase_set_error_callback(z->cb, (libcouchbase_error_callback) error_callback);
   libcouchbase_set_storage_callback(z->cb, (libcouchbase_storage_callback) set_callback);
   libcouchbase_set_get_callback(z->cb, (libcouchbase_get_callback) get_callback);
   libcouchbase_set_remove_callback(z->cb, (libcouchbase_remove_callback) remove_callback);
 
   if (libcouchbase_connect(z->cb) != LIBCOUCHBASE_SUCCESS) {
-    PyErr_SetString(ConnectionFailure, "libcouchbase_connect");
+    PyErr_SetString(ConnectionFailure, z->internal_error_msg ? 
+		    z->internal_error_msg : "libcouchbase_connect");
     goto free_event_base;
   }
 
   /* establish connection */
   libcouchbase_wait(z->cb);
+  if (z->internal_exception) {
+    PyErr_SetString(ConnectionFailure, z->internal_error_msg ? 
+		    z->internal_error_msg : "libcouchbase_connect");
+    goto free_event_base;
+  }
+    
 
   return PyCObject_FromVoidPtrAndDesc(z, pylibcb_instance_desc, pylibcb_instance_dest);
 
@@ -290,6 +324,7 @@ void set_context(PyObject *x) {
   context->succeeded = 0;
   context->timed_out = 0;
   context->exception = 0;
+  context->internal_exception = 0;
 }
 
 static PyObject *set(PyObject *self, PyObject *args) {
@@ -305,6 +340,7 @@ static PyObject *set(PyObject *self, PyObject *args) {
 
   libcouchbase_store_by_key(context->cb, hand_out_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, key, nkey, val, nval, 0, 0, 0);
   libcouchbase_wait(context->cb);
+  INTERNAL_EXCEPTION_HANDLER(return 0);
 
   if (context->exception)
     return 0;
@@ -326,6 +362,7 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
 
   libcouchbase_remove_by_key(context->cb, hand_out_ticket(new_ticket()), 0, 0, key, nkey, 0);
   libcouchbase_wait(context->cb);
+  INTERNAL_EXCEPTION_HANDLER(return 0);
 
   if (context->exception)
     return 0;
@@ -353,8 +390,9 @@ static PyObject *get(PyObject *self, PyObject *args) {
     create_timeout(usec, hand_out_ticket(ticket));
   libcouchbase_mget_by_key(context->cb, hand_out_ticket(ticket), 0, 0, 1, &key, &nkey, 0);
 
-  while (!context->timed_out && !context->succeeded && !context->exception)
+  while (!context->timed_out && !context->succeeded && !context->exception && !context->internal_exception)
     libcouchbase_wait(context->cb);
+  INTERNAL_EXCEPTION_HANDLER(return 0);
 
   if (context->exception)
     return 0;
