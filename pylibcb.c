@@ -41,8 +41,6 @@ typedef struct t_ticket_slab {
 
 #define SLAB_SIZE 256
 
-static int nslab = 0;
-
 ticket_slab *new_ticket_slab(struct t_ticket_slab *next) {
   ticket_slab *x = calloc(1, sizeof(ticket_slab) + sizeof(ticket) * SLAB_SIZE);
   if (!x)
