@@ -32,6 +32,38 @@ typedef struct t_ticket {
   struct t_ticket *next;
 } ticket;
 
+typedef struct t_ticket_slab {
+  int count;
+  int used;
+  ticket *slab;
+  struct t_ticket_slab *next;
+} ticket_slab;
+
+#define SLAB_SIZE 256
+
+static int nslab = 0;
+
+ticket_slab *new_ticket_slab(struct t_ticket_slab *next) {
+  ticket_slab *x = calloc(1, sizeof(ticket_slab) + sizeof(ticket) * SLAB_SIZE);
+  if (!x)
+    return 0;
+
+  int i;
+  x->slab = (void *) x + sizeof(ticket_slab);
+  x->count = SLAB_SIZE - 1;
+  x->next = next;
+  return x;
+}
+
+void destroy_ticket_slab(struct t_ticket_slab *t) {
+  ticket_slab *n;
+  while (t) {
+    n = t->next;
+    free(t);
+    t = n;
+  }
+}
+
 typedef struct t_buffer {
   size_t size;
   int filled;
@@ -70,6 +102,7 @@ void destroy_buffer(buffer *b) {
 typedef struct t_pylibcb_instance {
   int callback_ticket;
   ticket *ticket_pool;
+  ticket_slab *ticket_slabs;
   int succeeded;
   int timed_out;
   int exception;
@@ -87,7 +120,8 @@ static char *pylibcb_instance_desc = "pylibcb_instance";
 
 void pylibcb_instance_dest(void *obj, void *desc) {
   pylibcb_instance *z = (pylibcb_instance *) obj;
-
+  
+  destroy_ticket_slab(z->ticket_slabs);
   destroy_buffer(&z->returned_value);
   libcouchbase_destroy(z->cb);
   event_base_free(z->base);
@@ -96,14 +130,24 @@ void pylibcb_instance_dest(void *obj, void *desc) {
 
 static pylibcb_instance *context = 0;
 
-int *new_ticket() {
+int *alloc_ticket() {
   ticket *t;
 
   if (context->ticket_pool) {
     t = context->ticket_pool;
     context->ticket_pool = t->next;
-  } else
-    t = malloc(sizeof(ticket));    
+  } else {
+    ticket_slab *z = context->ticket_slabs;
+
+    if (z->used == z->count) {
+      ticket_slab *n = new_ticket_slab(z);
+      if (!n)
+	return 0;
+      context->ticket_slabs = n;
+    }
+
+    t = &z->slab[z->used++];
+  }
 
   t->ticket[0] = ++context->callback_ticket;
   t->ticket[1] = 0;
@@ -263,6 +307,12 @@ static PyObject *open(PyObject *self, PyObject *args) {
     return 0;
   }
 
+  z->ticket_slabs = new_ticket_slab(0);
+  if (!z->ticket_slabs) {
+    PyErr_SetString(OutOfMemory, "ran out of memory while allocating pylibcb instance");
+    goto free_instance;
+  }
+
   z->base = event_base_new();
   if (!z) {
     PyErr_SetString(OutOfMemory, "could not create event base for new instance");
@@ -339,6 +389,15 @@ void set_context(PyObject *x) {
   context->internal_exception = 0;
 }
 
+int *new_ticket() {
+  int *t = alloc_ticket();
+  if (!t) {
+    PyErr_SetString(OutOfMemory, "ran out of memory for new callback tracking tickets");
+    return 0;
+  } return t;
+}
+
+
 static PyObject *set(PyObject *self, PyObject *args) {
   PyObject *cb;
   void *key, *val;
@@ -353,8 +412,11 @@ static PyObject *set(PyObject *self, PyObject *args) {
   set_context(cb);
 
   time_t expiry = _expiry;
+  int *ticket = new_ticket();
+  if (!ticket)
+    return 0;
 
-  libcouchbase_store_by_key(context->cb, hand_out_ticket(new_ticket()), LIBCOUCHBASE_SET, 0, 0, 
+  libcouchbase_store_by_key(context->cb, hand_out_ticket(ticket), LIBCOUCHBASE_SET, 0, 0, 
 			    key, nkey, val, nval, 0, expiry, cas);
   libcouchbase_wait(context->cb);
   INTERNAL_EXCEPTION_HANDLER(return 0);
@@ -378,7 +440,11 @@ static PyObject *_remove(PyObject *self, PyObject *args) {
     return 0;
   set_context(cb);
 
-  libcouchbase_remove_by_key(context->cb, hand_out_ticket(new_ticket()), 0, 0, key, nkey, cas);
+  int *ticket = new_ticket();
+  if (!ticket)
+    return 0;
+
+  libcouchbase_remove_by_key(context->cb, hand_out_ticket(ticket), 0, 0, key, nkey, cas);
   libcouchbase_wait(context->cb);
   INTERNAL_EXCEPTION_HANDLER(return 0);
 
@@ -403,9 +469,11 @@ static PyObject *get(PyObject *self, PyObject *args) {
     return 0;  
   set_context(cb);
 
-  int *ticket = new_ticket();
   libcouchbase_size_t nkey = _nkey;
   time_t expiry = _expiry;
+  int *ticket = new_ticket();
+  if (!ticket)
+    return 0;
 
   if (usec)
     create_timeout(usec, hand_out_ticket(ticket));
