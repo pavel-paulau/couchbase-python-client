@@ -46,7 +46,6 @@ ticket_slab *new_ticket_slab(struct t_ticket_slab *next) {
   if (!x)
     return 0;
 
-  int i;
   x->slab = (void *) x + sizeof(ticket_slab);
   x->count = SLAB_SIZE - 1;
   x->next = next;
@@ -299,6 +298,16 @@ static PyObject *open(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "|ssss", &host, &user, &passwd, &bucket))
     return 0;
 
+  if (!strlen(host))
+    host = 0;
+  if (!strlen(user))
+    user = 0;
+  if (!strlen(passwd))
+    passwd = 0;
+  if (!strlen(bucket))
+    passwd = 0;
+
+
   pylibcb_instance *z = calloc(1, sizeof(pylibcb_instance));
   if (!z) {
     PyErr_SetString(OutOfMemory, "ran out of memory while allocating pylibcb instance");
@@ -517,30 +526,30 @@ static PyMethodDef PylibcbMethods[] = {
   { 0, 0, 0, 0 }
 };
 
-PyMODINIT_FUNC initpylibcb() {
+PyMODINIT_FUNC init_pylibcb() {
   PyObject *m;
 
-  m = Py_InitModule("pylibcb", PylibcbMethods);
+  m = Py_InitModule("_pylibcb", PylibcbMethods);
   if (!m)
     return;
 
-  Timeout = PyErr_NewException("pylibcb.Timeout", 0, 0);
+  Timeout = PyErr_NewException("_pylibcb.Timeout", 0, 0);
   Py_INCREF(Timeout);
   PyModule_AddObject(m, "Timeout", Timeout);
   
-  OutOfMemory = PyErr_NewException("pylibcb.OutOfMemory", 0, 0);
+  OutOfMemory = PyErr_NewException("_pylibcb.OutOfMemory", 0, 0);
   Py_INCREF(OutOfMemory);
   PyModule_AddObject(m, "OutOfMemory", OutOfMemory);
 
-  ConnectionFailure = PyErr_NewException("pylibcb.ConnectionFailure", 0, 0);
+  ConnectionFailure = PyErr_NewException("_pylibcb.ConnectionFailure", 0, 0);
   Py_INCREF(ConnectionFailure);
   PyModule_AddObject(m, "ConnectionFailure", ConnectionFailure);
   
-  Failure = PyErr_NewException("pylibcb.Failure", 0, 0);
+  Failure = PyErr_NewException("_pylibcb.Failure", 0, 0);
   Py_INCREF(Failure);
   PyModule_AddObject(m, "Failure", Failure);
 
-  KeyExists = PyErr_NewException("pylibcb.KeyExists", 0, 0);
+  KeyExists = PyErr_NewException("_pylibcb.KeyExists", 0, 0);
   Py_INCREF(KeyExists);
   PyModule_AddObject(m, "KeyExists", KeyExists);
 }
@@ -548,6 +557,6 @@ PyMODINIT_FUNC initpylibcb() {
 int main(int argc, char **argv) {  
   Py_SetProgramName(argv[0]);
   Py_Initialize();
-  initpylibcb();
+  init_pylibcb();
   return 0;
 }
