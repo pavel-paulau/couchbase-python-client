@@ -29,6 +29,7 @@ static PyObject *KeyExists;
 
 typedef struct t_ticket {  
   int ticket[2];
+  struct event *ev;
   struct t_ticket *next;
 } ticket;
 
@@ -148,6 +149,7 @@ int *alloc_ticket() {
 
   t->ticket[0] = ++context->callback_ticket;
   t->ticket[1] = 0;
+  t->ev = 0;
   t->next = 0;
 
   return (int *) t;  
@@ -162,6 +164,8 @@ int rip_ticket(int *t) {
   int r = t[0];
   if (!--t[1]) {
     ticket *_t = (ticket *) t;
+    if (_t->ev)
+      event_free(_t->ev);
     _t->next = context->ticket_pool;
     context->ticket_pool = _t;
   } return r;
@@ -198,6 +202,7 @@ void *get_callback(libcouchbase_t instance,
 		   libcouchbase_size_t nbytes,
 		   libcouchbase_uint32_t flags,
 		   libcouchbase_cas_t cas) {
+
   if (rip_ticket((int *) cookie) != context->callback_ticket)
     return 0;
   context->result = error;
@@ -280,13 +285,14 @@ void timeout_callback(libcouchbase_socket_t sock, short which, void *cb_data) {
   event_base_loopbreak(context->base);
 }
 
-void create_timeout(unsigned int usec, int *ticket) {
+void create_timeout(unsigned int usec, int *_ticket) {
   struct event *timeout = event_new(context->base, -1, 0, 0, 0);
   struct timeval tmo;
-  event_assign(timeout, context->base, -1, EV_TIMEOUT, timeout_callback, ticket);
+  event_assign(timeout, context->base, -1, EV_TIMEOUT, timeout_callback, _ticket);
   tmo.tv_sec = usec / 1000000;
   tmo.tv_usec = usec % 1000000;
   event_add(timeout, &tmo);
+  ((ticket *) _ticket)->ev = timeout;  
 }
 
 static PyObject *open(PyObject *self, PyObject *args) {
@@ -473,7 +479,7 @@ static PyObject *get(PyObject *self, PyObject *args) {
   if (!PyArg_ParseTuple(args, "Os#|iki", &cb, &key, &_nkey, &usec, &_expiry, &return_cas))
     return 0;
   if (!pyobject_is_pylibcb_instance(cb))
-    return 0;  
+    return 0;
   set_context(cb);
 
   libcouchbase_size_t nkey = _nkey;
@@ -501,7 +507,7 @@ static PyObject *get(PyObject *self, PyObject *args) {
   if (!context->succeeded) {
     PyErr_SetString(Failure, "no timeout.. AND no success?");
     return 0;
-  } 
+  }
 
   if (context->result == LIBCOUCHBASE_KEY_ENOENT) {
     Py_INCREF(Py_None);
