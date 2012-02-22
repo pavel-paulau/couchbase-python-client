@@ -27,9 +27,45 @@ static PyObject *KeyExists;
   return 0; \
   }
 
+/* allocators for commonly held objects */
+
+#define SLAB_SIZE 256
+
+typedef struct t_event_list {
+  struct event ev;
+  struct t_event_list *next;
+} event_list;
+
+typedef struct t_event_slab {
+  int count;
+  int used;
+  event_list *slab;
+  struct t_event_slab *next;
+} event_slab;
+
+event_slab *new_event_slab(struct t_event_slab *next) {
+  event_slab *x = calloc(1, sizeof(event_slab) + sizeof(event_list) * SLAB_SIZE);
+  if (!x)
+    return 0;
+
+  x->slab = (void *) x + sizeof(event_slab);
+  x->count = SLAB_SIZE - 1;
+  x->next = next;
+  return x;
+}
+
+void destroy_event_slab(struct t_event_slab *t) {
+  event_slab *n;
+  while (t) {
+    n = t->next;
+    free(t);
+    t = n;
+  }
+}
+
 typedef struct t_ticket {  
   int ticket[2];
-  struct event *ev;
+  struct t_event_list *ev;
   struct t_ticket *next;
 } ticket;
 
@@ -39,8 +75,6 @@ typedef struct t_ticket_slab {
   ticket *slab;
   struct t_ticket_slab *next;
 } ticket_slab;
-
-#define SLAB_SIZE 256
 
 ticket_slab *new_ticket_slab(struct t_ticket_slab *next) {
   ticket_slab *x = calloc(1, sizeof(ticket_slab) + sizeof(ticket) * SLAB_SIZE);
@@ -62,53 +96,21 @@ void destroy_ticket_slab(struct t_ticket_slab *t) {
   }
 }
 
-typedef struct t_buffer {
-  size_t size;
-  int filled;
-  void *contents;
-} buffer;
-
-int guarantee_buffer(buffer *b, size_t size) {
-  if (b->size < size) {
-    size_t i = 1;
-    size_t e = (SIZE_MAX >> 1) + 1;
-
-    --size;
-    do {
-      size |= size >> i;
-      i <<= 1;
-    } while (i != e);
-    ++size;
-    
-    if (b->contents)
-      free(b->contents);
-    b->contents = malloc(sizeof(char *) * size);
-    if (!b->contents) {
-      b->size = 0;
-      return 0;
-    }
-
-    b->size = size;
-  } return 1;    
-}
-
-void destroy_buffer(buffer *b) {
-  if (b->contents)
-    free(b->contents);
-}
+/* structure holding all state for python client */
 
 typedef struct t_pylibcb_instance {
   int callback_ticket;
   ticket *ticket_pool;
   ticket_slab *ticket_slabs;
+  event_list *event_pool;
+  event_slab *event_slabs;
   int succeeded;
   int timed_out;
   int exception;
   int internal_exception;
-  buffer returned_value;
+  PyObject *returned_value;
   libcouchbase_error_t result;
   libcouchbase_error_t internal_error;
-  char *internal_error_msg;
   libcouchbase_cas_t returned_cas;
   struct event_base *base;
   libcouchbase_t cb;
@@ -120,13 +122,36 @@ void pylibcb_instance_dest(void *obj, void *desc) {
   pylibcb_instance *z = (pylibcb_instance *) obj;
   
   destroy_ticket_slab(z->ticket_slabs);
-  destroy_buffer(&z->returned_value);
+  destroy_event_slab(z->event_slabs);
   libcouchbase_destroy(z->cb);
   event_base_free(z->base);
   free(z);
 }
 
 static pylibcb_instance *context = 0;
+
+event_list *alloc_event() {
+  event_list *ev;
+
+  if (context->event_pool) {
+    ev = context->event_pool;
+    context->event_pool = ev->next;
+  } else {
+    event_slab *z = context->event_slabs;
+    
+    if (z->used == z->count) {
+      event_slab *n = new_event_slab(z);
+      if (!n)
+	return 0;
+      context->event_slabs = n;
+    }
+
+    ev = &z->slab[z->used++];
+  }
+
+  ev->next = 0;
+  return ev;
+}
 
 int *alloc_ticket() {
   ticket *t;
@@ -164,12 +189,44 @@ int rip_ticket(int *t) {
   int r = t[0];
   if (!--t[1]) {
     ticket *_t = (ticket *) t;
-    if (_t->ev)
-      event_free(_t->ev);
+    if (_t->ev) {
+      event_del(&_t->ev->ev);
+      _t->ev->next = context->event_pool;
+      context->event_pool = _t->ev;
+    }
     _t->next = context->ticket_pool;
     context->ticket_pool = _t;
   } return r;
 }
+
+void timeout_callback(libcouchbase_socket_t sock, short which, void *cb_data) {
+  if (rip_ticket((int *) cb_data) != context->callback_ticket)
+    return;
+
+  /* mark current operation as timed out and break the event loop */
+ 
+  context->timed_out = 1;
+  event_base_loopbreak(context->base);
+}
+
+int create_timeout(unsigned int usec, int *_ticket) {
+  event_list *timeout = alloc_event();
+  if (!timeout) {
+    PyErr_SetString(OutOfMemory, "failed to allocate timeout event");
+    return 0;
+  }
+
+  struct timeval tmo;
+  event_assign(&timeout->ev, context->base, -1, EV_TIMEOUT, timeout_callback, _ticket);
+  tmo.tv_sec = usec / 1000000;
+  tmo.tv_usec = usec % 1000000;
+  event_add(&timeout->ev, &tmo);
+  ((ticket *) _ticket)->ev = timeout;
+  return 1;
+}
+
+static char *default_error_string = "internal exception";
+static PyObject *default_exception;
 
 void *error_callback(libcouchbase_t instance,
 		     libcouchbase_error_t error,
@@ -178,8 +235,8 @@ void *error_callback(libcouchbase_t instance,
   if (error == LIBCOUCHBASE_SUCCESS)
     return 0;
 
+  PyErr_SetString(default_exception, errinfo ? errinfo : default_error_string);
   context->internal_error = error;
-  context->internal_error_msg = (char *) errinfo;
   context->internal_exception = 1;
   event_base_loopbreak(context->base);
   return 0;
@@ -187,8 +244,6 @@ void *error_callback(libcouchbase_t instance,
 
 #define INTERNAL_EXCEPTION_HANDLER(x) { \
   if (context->internal_exception == 1) { \
-    PyErr_SetString(Failure, context->internal_error_msg ? \
-		    context->internal_error_msg : "internal exception"); \
     x; \
   } \
   }
@@ -209,8 +264,10 @@ void *get_callback(libcouchbase_t instance,
 
   switch (error) {
   case LIBCOUCHBASE_SUCCESS:
-  case LIBCOUCHBASE_KEY_ENOENT:
     break;
+  case LIBCOUCHBASE_KEY_ENOENT:
+    context->succeeded = 1;
+    return 0;
   case LIBCOUCHBASE_ENOMEM:
     CB_EXCEPTION(OutOfMemory, "libcouchbase_enomem");
   case LIBCOUCHBASE_EINTERNAL:
@@ -219,14 +276,7 @@ void *get_callback(libcouchbase_t instance,
     CB_EXCEPTION(Failure, "mystery condition in get callback");
   }
   
-  if (!guarantee_buffer(&context->returned_value, nbytes)) {
-    PyErr_SetString(OutOfMemory, "not enough memory for results of get");
-    context->exception = 1;
-    return 0;
-  }
-
-  memcpy(context->returned_value.contents, bytes, nbytes);
-  context->returned_value.filled = nbytes;
+  context->returned_value = Py_BuildValue("s#", bytes, nbytes);
   context->returned_cas = cas;
   context->succeeded = 1;
 
@@ -275,26 +325,6 @@ void *remove_callback(libcouchbase_t instance,
   return 0;
 }
 
-void timeout_callback(libcouchbase_socket_t sock, short which, void *cb_data) {
-  if (rip_ticket((int *) cb_data) != context->callback_ticket)
-    return;
-
-  /* mark current operation as timed out and break the event loop */
- 
-  context->timed_out = 1;
-  event_base_loopbreak(context->base);
-}
-
-void create_timeout(unsigned int usec, int *_ticket) {
-  struct event *timeout = event_new(context->base, -1, 0, 0, 0);
-  struct timeval tmo;
-  event_assign(timeout, context->base, -1, EV_TIMEOUT, timeout_callback, _ticket);
-  tmo.tv_sec = usec / 1000000;
-  tmo.tv_usec = usec % 1000000;
-  event_add(timeout, &tmo);
-  ((ticket *) _ticket)->ev = timeout;  
-}
-
 static PyObject *open(PyObject *self, PyObject *args) {
   char *host = 0;
   char *user = 0;
@@ -313,7 +343,6 @@ static PyObject *open(PyObject *self, PyObject *args) {
   if (!strlen(bucket))
     passwd = 0;
 
-
   pylibcb_instance *z = calloc(1, sizeof(pylibcb_instance));
   if (!z) {
     PyErr_SetString(OutOfMemory, "ran out of memory while allocating pylibcb instance");
@@ -321,7 +350,8 @@ static PyObject *open(PyObject *self, PyObject *args) {
   }
 
   z->ticket_slabs = new_ticket_slab(0);
-  if (!z->ticket_slabs) {
+  z->event_slabs = new_event_slab(0);
+  if (!z->ticket_slabs || !z->event_slabs) {
     PyErr_SetString(OutOfMemory, "ran out of memory while allocating pylibcb instance");
     goto free_instance;
   }
@@ -361,28 +391,36 @@ static PyObject *open(PyObject *self, PyObject *args) {
   libcouchbase_set_storage_callback(z->cb, (libcouchbase_storage_callback) set_callback);
   libcouchbase_set_get_callback(z->cb, (libcouchbase_get_callback) get_callback);
   libcouchbase_set_remove_callback(z->cb, (libcouchbase_remove_callback) remove_callback);
+  
+  default_error_string = "libcouchbase_connect";
+  default_exception = ConnectionFailure;
 
   if (libcouchbase_connect(z->cb) != LIBCOUCHBASE_SUCCESS) {
-    PyErr_SetString(ConnectionFailure, z->internal_error_msg ? 
-		    z->internal_error_msg : "libcouchbase_connect");
     goto free_event_base;
   }
 
   /* establish connection */
   libcouchbase_wait(z->cb);
   if (z->internal_exception) {
-    PyErr_SetString(ConnectionFailure, z->internal_error_msg ? 
-		    z->internal_error_msg : "libcouchbase_connect");
     goto free_event_base;
   }
+
+  default_error_string = "internal exception";
+  default_exception = Failure;
 
   return PyCObject_FromVoidPtrAndDesc(z, pylibcb_instance_desc, pylibcb_instance_dest);
 
  free_event_base:
   free(z->base);
  free_instance:
-  free(z);
+  if (z->ticket_slabs)
+    destroy_ticket_slab(z->ticket_slabs);
+  if (z->event_slabs)
+    destroy_event_slab(z->event_slabs);
 
+  free(z);
+  default_error_string = "internal exception";
+  default_exception = Failure;
   return 0;
 }
 
@@ -489,7 +527,10 @@ static PyObject *get(PyObject *self, PyObject *args) {
     return 0;
 
   if (usec)
-    create_timeout(usec, hand_out_ticket(ticket));
+    if (!create_timeout(usec, hand_out_ticket(ticket))) {
+      rip_ticket(ticket);
+      return 0;
+    }
   libcouchbase_mget_by_key(context->cb, hand_out_ticket(ticket), 0, 0, 1, &key, &nkey, _expiry ? &expiry : 0);
 
   while (!context->timed_out && !context->succeeded && !context->exception && !context->internal_exception)
@@ -515,9 +556,8 @@ static PyObject *get(PyObject *self, PyObject *args) {
   }
 
   if (return_cas)
-    return Py_BuildValue("s#k", context->returned_value.contents, context->returned_value.filled,
-			(unsigned long) context->returned_cas);
-  return Py_BuildValue("s#", context->returned_value.contents, context->returned_value.filled);
+    return Py_BuildValue("Ok", context->returned_value, (unsigned long) context->returned_cas);
+  return context->returned_value;
 }
 
 static PyMethodDef PylibcbMethods[] = {
@@ -558,6 +598,8 @@ PyMODINIT_FUNC init_pylibcb() {
   KeyExists = PyErr_NewException("_pylibcb.KeyExists", 0, 0);
   Py_INCREF(KeyExists);
   PyModule_AddObject(m, "KeyExists", KeyExists);
+
+  default_exception = Failure;
 }
 
 int main(int argc, char **argv) {  
