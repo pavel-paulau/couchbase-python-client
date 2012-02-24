@@ -1,4 +1,4 @@
-B1;2600;0cpylibcb
+pylibcb
 
 for now, the home of the first iteration of a python library wrapping
 libcouchbase functionality
@@ -7,19 +7,7 @@ before you use this, you'll need to install:
 
 Couchbase 1.8
 install latest libevent2 from libevent.org. don't use universe
-use the most recent version of libmemcached from libmemcached.org. build from scratch
-https://github.com/couchbase/libvbucket
-https://github.com/couchbase/libcouchbase
+need libmemcached
+need https://github.com/couchbase/libvbucket
+need https://github.com/couchbase/libcouchbase
 
-for libcouchbase, when running configure, you should invoke it with --prefix=/opt/couchbase
-
-from my home machine, i had to use the following invocation:
-
-env CPPFLAGS="-I/opt/couchbase/include" ./configure --prefix=/opt/couchbase
-
-later note: just running 'make' will invoke configure with the correct arguments for the machine
-
-for now, there is just an example program @ poc/argh.c which demonstrates
-constructing an event loop explicitly to add ones own timeouts (which
-are currently not supported for high level libcouchbase operations)
-to the event loop

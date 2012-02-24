@@ -8,7 +8,7 @@ pylibcb = Extension('_pylibcb',
                     library_dirs = ['/opt/couchbase/lib'],
                     sources = ['pylibcb.c'])
 
-setup (name = 'Pylibcb',
+setup (name = 'pylibcb',
        version = '0.1',
        description = 'pylibcb',
        ext_modules = [pylibcb],
