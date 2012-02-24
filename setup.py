@@ -13,6 +13,6 @@ setup (name = 'pylibcb',
        description = 'Python Couchbase Client',
        author='Sebastian Hubbard',
        author_email='sebastian@chango.com',
-       url='www.bitbucket.org/chango/pylibcb',
+       url='http://www.bitbucket.org/chango/pylibcb',
        ext_modules = [pylibcb],
        py_modules = ['pylibcb'])
