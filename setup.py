@@ -9,7 +9,7 @@ pylibcb = Extension('_pylibcb',
                     sources = ['pylibcb.c'])
 
 setup (name = 'pylibcb',
-       version = '0.1.1',
+       version = '0.2.0',
        description = 'Python Couchbase Client',
        author='Sebastian Hubbard',
        author_email='sebastian@chango.com',
