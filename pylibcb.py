@@ -44,3 +44,23 @@ class Client(object):
 
     def remove(self, key, cas=0):
         return _pylibcb.remove(self.instance, key)
+
+    def get_async_limit(self):
+        return _pylibcb.get_async_limit(self.instance)
+
+    def set_async_limit(self, limit):
+        return _pylibcb.set_async_limit(self.instance, limit)
+
+    def get_async_count(self):
+        return _pylibcb.get_async_count(self.instance)
+
+    def enable_async(self):
+        return _pylibcb.enable_async(self.instance)
+
+    def disable_async(self):
+        return _pylibcb.disable_async(self.instance)
+
+    def async_wait(self, timeout=None):
+        if timeout:
+            return _pylibcb.async_wait(self.instance, int(timeout * 1000))
+        return _pylibcb.async_wait(self.instance, self.timeout)

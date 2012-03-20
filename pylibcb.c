@@ -26,6 +26,9 @@ static PyObject *AsyncLimit;
     if (context->async_count >= context->async_limit) {		\
       PyErr_SetString(AsyncLimit, "async limit reached");	\
       return 0;							\
+    } else if (context->async.count == context->async.size) {	\
+      PyErr_SetString(AsyncLimit, "too many results pending");	\
+      return 0;							\
     }								\
   }
 
@@ -38,6 +41,10 @@ static PyObject *AsyncLimit;
     PyErr_SetString(type, msg);			\
     context->exception = 1;			\
     return 0;					\
+  }
+
+#define NEW_EXCEPTION(type, msg) {					\
+    return PyObject_CallObject(type, Py_BuildValue("(s)", msg));	\
   }
 
 #define INTERNAL_EXCEPTION_HANDLER(x) {		\
@@ -147,7 +154,8 @@ int async_size(async_results *x, int size) {
     s = (s + 1) % x->size;
   }
   
-  free(x->buffer);
+  if (x->buffer)
+    free(x->buffer);
   x->buffer = new;
   x->size = size;
   x->count = o;
@@ -351,6 +359,51 @@ void *error_callback(libcouchbase_t instance,
   return 0;
 }
 
+#define lcb_code(code, type)	  \
+  case code:			  \
+  e_type = type;		  \
+  e_msg = # code;		  \
+  break
+
+#define lcb_fail(code) lcb_code(code, Failure)
+
+PyObject *lcb_error(libcouchbase_error_t err, int context_error) {
+  PyObject *e_type = Failure;
+  char *e_msg = "unknown error passed to lcb_error";
+
+  switch (err) {
+    lcb_fail(LIBCOUCHBASE_SUCCESS);
+    lcb_fail(LIBCOUCHBASE_AUTH_CONTINUE);
+    lcb_fail(LIBCOUCHBASE_AUTH_ERROR);
+    lcb_fail(LIBCOUCHBASE_DELTA_BADVAL);
+    lcb_fail(LIBCOUCHBASE_E2BIG);
+    lcb_fail(LIBCOUCHBASE_EBUSY);
+    lcb_fail(LIBCOUCHBASE_EINTERNAL);
+    lcb_fail(LIBCOUCHBASE_EINVAL);
+    lcb_code(LIBCOUCHBASE_ENOMEM, OutOfMemory);
+    lcb_fail(LIBCOUCHBASE_ERANGE);
+    lcb_fail(LIBCOUCHBASE_ERROR);
+    lcb_fail(LIBCOUCHBASE_ETMPFAIL);
+    lcb_code(LIBCOUCHBASE_KEY_EEXISTS, KeyExists);
+    lcb_fail(LIBCOUCHBASE_KEY_ENOENT);
+    lcb_fail(LIBCOUCHBASE_LIBEVENT_ERROR);
+    lcb_code(LIBCOUCHBASE_NETWORK_ERROR, ConnectionFailure);
+    lcb_fail(LIBCOUCHBASE_NOT_MY_VBUCKET);
+    lcb_fail(LIBCOUCHBASE_NOT_STORED);
+    lcb_fail(LIBCOUCHBASE_NOT_SUPPORTED);
+    lcb_fail(LIBCOUCHBASE_UNKNOWN_COMMAND);
+    lcb_code(LIBCOUCHBASE_UNKNOWN_HOST, ConnectionFailure);
+    lcb_fail(LIBCOUCHBASE_PROTOCOL_ERROR);
+    lcb_code(LIBCOUCHBASE_ETIMEDOUT, Timeout);
+    lcb_code(LIBCOUCHBASE_CONNECT_ERROR, ConnectionFailure);
+  }
+
+  if (context_error)
+    CB_EXCEPTION(e_type, e_msg);
+  NEW_EXCEPTION(e_type, e_msg);
+}
+
+
 void *get_callback(libcouchbase_t instance,
 		   const void *cookie,
 		   libcouchbase_error_t error,
@@ -360,8 +413,30 @@ void *get_callback(libcouchbase_t instance,
 		   libcouchbase_size_t nbytes,
 		   libcouchbase_uint32_t flags,
 		   libcouchbase_cas_t cas) {
+  int t = rip_ticket((int *) cookie);
+  if (context->async_mode) {
+    PyObject *rval;
+    --context->async_count;
 
-  if (rip_ticket((int *) cookie) != context->callback_ticket)
+    switch (error) {
+    case LIBCOUCHBASE_SUCCESS:
+      rval = Py_BuildValue("(s#k)", bytes, nbytes, (unsigned long) cas);
+      break;
+
+    case LIBCOUCHBASE_KEY_ENOENT:
+      Py_INCREF(Py_None);
+      rval = Py_None;
+      break;
+      
+    default:
+      rval = lcb_error(error, 0);
+    }
+
+    async_push(&context->async, t, rval);
+    return 0;
+  }
+
+  if (t != context->callback_ticket)
     return 0;
   context->result = error;
 
@@ -371,12 +446,8 @@ void *get_callback(libcouchbase_t instance,
   case LIBCOUCHBASE_KEY_ENOENT:
     context->succeeded = 1;
     return 0;
-  case LIBCOUCHBASE_ENOMEM:
-    CB_EXCEPTION(OutOfMemory, "libcouchbase_enomem");
-  case LIBCOUCHBASE_EINTERNAL:
-    CB_EXCEPTION(Failure, "libcouchbase_einternal");
   default:
-    CB_EXCEPTION(Failure, "mystery condition in get callback");
+    return lcb_error(error, 1);
   }
   
   context->returned_value = Py_BuildValue("s#", bytes, nbytes);
@@ -393,17 +464,33 @@ void *set_callback(libcouchbase_t instance,
 		   const void *key,
 		   libcouchbase_size_t nkey,
 		   libcouchbase_cas_t cas) {
-  if (rip_ticket((int *) cookie) != context->callback_ticket)
+  int t = rip_ticket((int *) cookie);
+  if (context->async_mode) {
+    PyObject *rval;
+    --context->async_count;
+    
+    switch(error) {
+    case LIBCOUCHBASE_SUCCESS:
+      Py_INCREF(Py_True);
+      rval = Py_True;
+      break;
+    default:
+      rval = lcb_error(error, 0);
+    }
+
+    async_push(&context->async, t, rval);
+    return 0;
+  }
+
+  if (t != context->callback_ticket)
     return 0;
   context->result = error;
 
   switch (error) {
   case LIBCOUCHBASE_SUCCESS:
     break;
-  case LIBCOUCHBASE_KEY_EEXISTS:
-    CB_EXCEPTION(KeyExists, "key already present");
   default:
-    CB_EXCEPTION(Failure, "mystery condition in set callback");
+    return lcb_error(error, 1);
   }
 
   return 0;
@@ -414,7 +501,25 @@ void *remove_callback(libcouchbase_t instance,
 		      libcouchbase_error_t error,
 		      const void *key,
 		      libcouchbase_size_t nkey) {
-  if (rip_ticket((int *) cookie) != context->callback_ticket)
+  int t = rip_ticket((int *) cookie);
+  if (context->async_mode) {
+    PyObject *rval;
+    --context->async_count;
+    
+    switch (error) {
+    case LIBCOUCHBASE_SUCCESS:
+      Py_INCREF(Py_True);
+      rval = Py_True;
+      break;
+    default:
+      rval = lcb_error(error, 0);
+    }
+
+    async_push(&context->async, t, rval);
+    return 0; 
+  }
+
+  if (t != context->callback_ticket)
     return 0;
   context->result = error;
 
@@ -422,7 +527,7 @@ void *remove_callback(libcouchbase_t instance,
   case LIBCOUCHBASE_SUCCESS:
     break;
   default:
-    CB_EXCEPTION(Failure, "mystery condition in set callback");
+    return lcb_error(error, 1);
   }  
 
   return 0;
@@ -581,8 +686,8 @@ static PyObject *set_async_limit(PyObject *self, PyObject *args) {
 
   set_context(cb);
 
-  if (context->async.count < limit)
-    async_size(&context->async, limit);
+  if (context->async.count * 2 < limit)
+    async_size(&context->async, limit * 2);
   context->async_limit = limit;
 
   Py_RETURN_NONE;
@@ -607,8 +712,8 @@ static PyObject *enable_async(PyObject *self, PyObject *args) {
 
   context->async_mode = 1;
   context->async_count = 0;
-  if (context->async.count < context->async_limit)
-    async_size(&context->async, context->async_limit);
+  if (context->async.count < context->async_limit * 2)
+    async_size(&context->async, context->async_limit * 2);
 
   Py_RETURN_NONE;
 }
@@ -751,20 +856,27 @@ static PyObject *async_wait(PyObject *self, PyObject *args) {
     return 0;
   }
 
-  int *ticket = new_ticket();
-  if (!ticket)
-    return 0;
+  if (usec) {
+    int *ticket = new_ticket();
+    if (!ticket)
+      return 0;
 
-  if (!create_timeout(usec, hand_out_ticket(ticket))) {
-    rip_ticket(ticket);
-    return 0;
+    if (!create_timeout(usec, hand_out_ticket(ticket))) {
+      rip_ticket(ticket);
+      return 0;
+    }
   }
 
   while (!context->timed_out && context->async_count && !context->internal_exception)
     libcouchbase_wait(context->cb);
+
   INTERNAL_EXCEPTION_HANDLER(return 0);
 
-  return get_async_results();
+  PyObject *r = get_async_results();
+  if (!r) {
+    PyErr_SetString(Failure, "get_async_results");
+    return 0;
+  } return r;
 }
 
 static PyMethodDef PylibcbMethods[] = {
@@ -787,7 +899,7 @@ static PyMethodDef PylibcbMethods[] = {
   { "disable_async", disable_async, METH_VARARGS,
     "Disable asynchronous behavior" },
   { "async_wait", async_wait, METH_VARARGS,
-  "Execute eventloop for a given number of microseconds" },
+    "Execute eventloop for a given number of microseconds" },
   { 0, 0, 0, 0 }
 };
 
