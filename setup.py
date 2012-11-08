@@ -1,18 +1,25 @@
 from distutils.core import setup, Extension
 
-#gcc pylibcb.c -I/opt/couchbase/include -Wl,-rpath -Wl,/opt/couchbase/lib -levent -lcouchbase
-
 pylibcb = Extension('_pylibcb',
-                    #include_dirs = ['/opt/couchbase/include'],
-                    libraries = ['event', 'couchbase'],
-                    library_dirs = ['/opt/couchbase/lib'],
-                    sources = ['pylibcb.c'])
+                    libraries=['event', 'couchbase'],
+                    sources=['couchbase/pylibcb.c'])
 
-setup (name = 'pylibcb',
-       version = '0.2.0',
-       description = 'Python Couchbase Client',
-       author='Sebastian Hubbard',
-       author_email='sebastian@chango.com',
-       url='http://www.bitbucket.org/chango/pylibcb',
-       ext_modules = [pylibcb],
-       py_modules = ['pylibcb'])
+setup(
+    name='pylibcb',
+    version='0.1.0',
+    description='Couchbase Python client',
+    ext_modules=[pylibcb],
+    packages=['couchbase'],
+    license="LICENSE.txt",
+    keywords=["encoding", "i18n", "xml"],
+    classifiers=[
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 2.6",
+        "Development Status :: 4 - Beta",
+        "Environment :: Other Environment",
+        "Intended Audience :: Developers",
+        "License :: OSI Approved :: Apache Software License",
+        "Operating System :: OS Independent",
+        "Topic :: Software Development :: Libraries :: Python Modules",
+    ],
+)
