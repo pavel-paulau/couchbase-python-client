@@ -1,17 +1,14 @@
-pylibcb
+Couchbase Python client
+=======================
 
-for now, the home of the first iteration of a python library wrapping
-libcouchbase functionality
+Before you use this, you'll need to install C Client Library:
 
-before you use this, you'll need to install:
+http://www.couchbase.com/develop/c/current
 
-Couchbase 1.8
-install latest libevent2 from libevent.org. don't use universe
+Then:
 
-Need libcouchbase and libvbucket.  See:
-http://www.couchbase.org/develop/c/current
+    python setup.py install
 
-... or if installing from source:
-need https://github.com/couchbase/libvbucket
-need https://github.com/couchbase/libcouchbase
+Finally:
 
+    from couchbase import Client
