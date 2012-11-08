@@ -11,24 +11,20 @@ class Client(object):
         self.timeout = int(timeout * 1000)
 
     def get(self, key, timeout=None):
-        if timeout:
-            return _pylibcb.get(self.instance, key, timeout * 1000)
-        return _pylibcb.get(self.instance, key, self.timeout)
+        timeout = int(timeout * 1000) or self.timeout
+        return _pylibcb.get(self.instance, key, timeout)
 
     def gat(self, key, new_expiry, timeout=None):
-        if timeout:
-            return _pylibcb.get(self.instance, key, int(timeout * 1000), new_expiry)
-        return _pylibcb.get(self.instance, key, self.timeout, new_expiry)
+        timeout = int(timeout * 1000) or self.timeout
+        return _pylibcb.get(self.instance, key, timeout, new_expiry)
 
     def get_cas(self, key, timeout=None):
-        if timeout:
-            return _pylibcb.get(self.instance, key, int(timeout * 1000), 0, 1)
-        return _pylibcb.get(self.instance, key, self.timeout, 0, 1)
+        timeout = int(timeout * 1000) or self.timeout
+        return _pylibcb.get(self.instance, key, timeout, 0, 1)
 
     def gat_cas(self, key, new_expiry, timeout=None):
-        if timeout:
-            return _pylibcb.get(self.instance, key, int(timeout * 1000), new_expiry, 1)
-        return _pylibcb.get(self.instance, key, self.timeout, new_expiry, 1)
+        timeout = int(timeout * 1000) or self.timeout
+        return _pylibcb.get(self.instance, key, timeout, new_expiry, 1)
 
     def set(self, key, value, expiry=0, cas=0):
         return _pylibcb.set(self.instance, key, value, expiry, cas)
@@ -52,6 +48,5 @@ class Client(object):
         return _pylibcb.disable_async(self.instance)
 
     def async_wait(self, timeout=None):
-        if timeout:
-            return _pylibcb.async_wait(self.instance, int(timeout * 1000))
-        return _pylibcb.async_wait(self.instance, self.timeout)
+        timeout = int(timeout * 1000) or self.timeout
+        return _pylibcb.async_wait(self.instance, timeout)
