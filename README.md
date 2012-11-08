@@ -1,11 +1,7 @@
 Couchbase Python client
 =======================
 
-Before you use this, you'll need to install C Client Library:
-
-http://www.couchbase.com/develop/c/current
-
-Then:
+Before you use this, you'll need to install [C Client Library](http://www.couchbase.com/develop/c/current). Then:
 
     python setup.py install
 
