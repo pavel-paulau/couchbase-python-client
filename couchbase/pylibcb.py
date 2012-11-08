@@ -10,19 +10,19 @@ class Client(object):
         self.instance = _pylibcb.open(host, user, password, bucket)
         self.timeout = int(timeout * 1000)
 
-    def get(self, key, timeout=None):
+    def get(self, key, timeout=0):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout)
 
-    def gat(self, key, new_expiry, timeout=None):
+    def gat(self, key, new_expiry, timeout=0):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout, new_expiry)
 
-    def get_cas(self, key, timeout=None):
+    def get_cas(self, key, timeout=0):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout, 0, 1)
 
-    def gat_cas(self, key, new_expiry, timeout=None):
+    def gat_cas(self, key, new_expiry, timeout=0):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout, new_expiry, 1)
 
@@ -47,6 +47,6 @@ class Client(object):
     def disable_async(self):
         return _pylibcb.disable_async(self.instance)
 
-    def async_wait(self, timeout=None):
+    def async_wait(self, timeout=0):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.async_wait(self.instance, timeout)
