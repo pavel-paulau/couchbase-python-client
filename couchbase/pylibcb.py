@@ -67,11 +67,10 @@ class Client(object):
         :param cas: CAS (Compare And Swap) value"""
         return _pylibcb.set(self.instance, key, value, expiry, cas)
 
-    def remove(self, key, cas=0):
+    def remove(self, key):
         """Remove a value by key
 
-        :param key: key of document to be removed
-        :param cas: CAS (Compare And Swap) value"""
+        :param key: key of document to be removed"""
         return _pylibcb.remove(self.instance, key)
 
     def get_async_limit(self):
