@@ -5,7 +5,7 @@ pylibcb = Extension('_pylibcb',
                     sources=['couchbase/pylibcb.c'])
 
 setup(
-    name='pylibcb',
+    name='couchbase',
     version='0.1.0',
     description='Couchbase Python client',
     ext_modules=[pylibcb],
