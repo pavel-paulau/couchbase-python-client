@@ -1,5 +1,7 @@
 import _pylibcb
 
+from decorators import get_as_json, set_as_json
+
 
 class Client(object):
 
@@ -17,6 +19,7 @@ class Client(object):
         self.instance = _pylibcb.open(host, user, password, bucket)
         self.timeout = int(timeout * 1000)
 
+    @get_as_json
     def get(self, key, timeout=0):
         """Get a value by key.
 
@@ -25,6 +28,7 @@ class Client(object):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout)
 
+    @get_as_json
     def gat(self, key, expiry, timeout=0):
         """Get and touch.
 
@@ -34,6 +38,7 @@ class Client(object):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout, expiry)
 
+    @get_as_json
     def get_cas(self, key, timeout=0):
         """GET with CAS.
 
@@ -42,6 +47,7 @@ class Client(object):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout, 0, 1)
 
+    @get_as_json
     def gat_cas(self, key, expiry, timeout=0):
         """GAT with CAS.
 
@@ -51,6 +57,7 @@ class Client(object):
         timeout = int(timeout * 1000) or self.timeout
         return _pylibcb.get(self.instance, key, timeout, expiry, 1)
 
+    @set_as_json
     def set(self, key, value, expiry=0, cas=0):
         """Set a value by key.
 
