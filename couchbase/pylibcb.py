@@ -5,8 +5,8 @@ class Client(object):
 
     """Couchbase client"""
 
-    def __init__(self, host='localhost', user='', password='', bucket='',
-                 timeout=0):
+    def __init__(self, host='localhost', user='', password='',
+                 bucket='default', timeout=0):
         """Open connection to Couchbase server.
 
         :param host: hostname of IP address
